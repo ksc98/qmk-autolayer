@@ -48,8 +48,16 @@ pub struct Rule {
     pub patterns: Vec<String>,
     /// Layer to turn on while matched. Defaults to `default_layer`.
     pub layer: Option<u8>,
-    /// Only drive the keyboard with this name. Default: all keyboards.
-    pub keyboard: Option<String>,
+    /// Only drive these keyboards, by name: a string or an array of strings.
+    /// Default: all keyboards.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub keyboard: Vec<String>,
+}
+
+impl Rule {
+    fn applies_to(&self, kb: &str) -> bool {
+        self.keyboard.is_empty() || self.keyboard.iter().any(|k| k == kb)
+    }
 }
 
 fn one() -> u8 {
@@ -90,7 +98,7 @@ impl Config {
     pub fn layer_for(&self, kb: &str, candidates: &[&str]) -> Option<u8> {
         self.rules
             .iter()
-            .filter(|r| r.keyboard.as_deref().is_none_or(|k| k == kb))
+            .filter(|r| r.applies_to(kb))
             .find(|r| r.patterns.iter().any(|p| candidates.iter().any(|c| glob(p, c))))
             .map(|r| r.layer.unwrap_or(self.default_layer))
     }
@@ -100,7 +108,7 @@ impl Config {
         let mut v: Vec<u8> = self
             .rules
             .iter()
-            .filter(|r| r.keyboard.as_deref().is_none_or(|k| k == kb))
+            .filter(|r| r.applies_to(kb))
             .map(|r| r.layer.unwrap_or(self.default_layer))
             .collect();
         v.sort_unstable();
@@ -126,7 +134,7 @@ pub fn load(path: &Path) -> Result<Config, String> {
         if r.patterns.is_empty() {
             return Err(format!("{}: a [[rule]] has an empty `match`", path.display()));
         }
-        if let Some(k) = &r.keyboard {
+        for k in &r.keyboard {
             if !cfg.keyboards.iter().any(|kb| kb.label() == *k) {
                 return Err(format!(
                     "{}: rule refers to unknown keyboard {k:?}",
@@ -199,6 +207,20 @@ pub fn glob(pattern: &str, s: &str) -> bool {
     rec(pattern.as_bytes(), s.as_bytes())
 }
 
+/// `"typek"` or `["typek", "corne"]`.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::One(s) => vec![s],
+        Raw::Many(v) => v,
+    })
+}
+
 // TOML has no hex integer literals without the 0x prefix being an integer
 // already, but people write ids as "7179" (a string) as often as 0x7179.
 // Accept both.
@@ -256,10 +278,16 @@ mod tests {
             pid = "8475"
             [[rule]]
             match = ["steam_app_*", "valheim.x86_64"]
+            [[keyboard]]
+            name = "corne"
             [[rule]]
             match = ["firefox"]
             layer = 2
             keyboard = "typek"
+            [[rule]]
+            match = ["kitty"]
+            layer = 3
+            keyboard = ["typek", "corne"]
             "#,
         )
         .unwrap();
@@ -269,8 +297,11 @@ mod tests {
         assert_eq!(cfg.layer_for("typek", &["steam_app_1"]), Some(1));
         assert_eq!(cfg.layer_for("typek", &["firefox"]), Some(2));
         assert_eq!(cfg.layer_for("other", &["firefox"]), None);
-        assert_eq!(cfg.layer_for("typek", &["kitty"]), None);
-        assert_eq!(cfg.layers_for("typek"), vec![1, 2]);
+        assert_eq!(cfg.layer_for("typek", &["kitty"]), Some(3));
+        assert_eq!(cfg.layer_for("corne", &["kitty"]), Some(3));
+        assert_eq!(cfg.layer_for("corne", &["firefox"]), None);
+        assert_eq!(cfg.layers_for("typek"), vec![1, 2, 3]);
+        assert_eq!(cfg.layers_for("corne"), vec![1, 3]);
         assert_eq!(cfg.layers_for("other"), vec![1]);
     }
 

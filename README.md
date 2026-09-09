@@ -123,7 +123,7 @@ match = ["valheim.x86_64", "Terraria"]       # native games, layer 1
 [[rule]]
 match = ["firefox"]
 layer = 2
-# keyboard = "typek"                         # limit to one keyboard
+# keyboard = "typek"                         # or ["typek", "corne"]; default: all
 ```
 
 To find a window's class or executable name, run `qmk-autolayer -v` and
