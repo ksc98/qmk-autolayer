@@ -1,204 +1,166 @@
 # qmk-autolayer
 
-Switch QMK keyboard layers automatically from the focused window on Linux.
-Focus a game, the gaming layer turns on; tab out, it turns off. The layer
-logic stays in the firmware, so your layer indicators, per-layer RGB, and
-everything else the keyboard does with layers keep working.
+Switches QMK keyboard layers from the focused window on Linux. Hyprland
+reports focus changes; the daemon matches the window against rules and
+writes a raw-HID report to the keyboard, which calls `layer_on` or
+`layer_off`. Layer logic, indicators, and per-layer lighting stay in
+firmware.
 
-Small Rust daemon, no runtime dependencies, about 1 MB resident, idle at
-0% CPU. Talks to Hyprland over its IPC socket and to the keyboard over the
-raw-HID interface QMK already exposes for VIA.
+Rust, two dependencies (`serde`, `toml`), ~1 MB resident, no polling.
 
-```
-[focus change] -> Hyprland IPC -> match class / exe against rules -> [0x42, layer, on] -> hidraw -> layer_on()
-```
+## Requirements
 
-## How it works
-
-1. Hyprland emits an `activewindow` event on every focus change.
-2. The daemon asks Hyprland for the focused window's class, initial class,
-   and pid, and reads the executable name from `/proc/<pid>/exe`.
-3. Those three names are matched against the rules in your config. First
-   match wins and names a layer.
-4. When the wanted layer changes, one 32-byte raw-HID report is written to
-   the keyboard: `[command, layer, 1]` to turn it on, `[command, layer, 0]`
-   to turn it off. Nothing is sent while the answer stays the same, so a
-   layer you toggle by hand outside any rule is left alone.
-
-At startup, and whenever a keyboard is plugged in, every layer the rules can
-set is turned off first so no state sticks from a previous run.
+- Hyprland (other compositors: see below).
+- A QMK board with `RAW_ENABLE = yes` or `VIA_ENABLE = yes`.
+- A small firmware addition (below).
+- Read/write access to the board's hidraw node.
 
 ## Install
-
-Requires a Rust toolchain and Hyprland.
 
 ```sh
 git clone https://github.com/ksc98/qmk-autolayer
 cd qmk-autolayer
-just install          # cargo install + systemd user unit, enabled and started
+just install
 ```
 
-Without `just`:
+`just install` runs `cargo install --path . --locked`, installs
+`qmk-autolayer.service` as a systemd user unit, and enables it. The unit is
+bound to `graphical-session.target`.
 
-```sh
-cargo install --path . --locked
-install -Dm644 qmk-autolayer.service ~/.config/systemd/user/qmk-autolayer.service
-systemctl --user daemon-reload
-systemctl --user enable --now qmk-autolayer.service
-```
+### hidraw access
 
-The unit is bound to `graphical-session.target`, so it starts with your
-Wayland session and stops with it.
-
-### hidraw permissions
-
-The raw-HID node is root-only by default. Grant your user access with a udev
-rule (substitute your board's ids; `lsusb` shows them):
+hidraw nodes are root-only by default. Add a udev rule with your board's
+USB ids (`lsusb`):
 
 ```
 # /etc/udev/rules.d/70-qmk-raw-hid.rules
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="7179", ATTRS{idProduct}=="8475", TAG+="uaccess"
 ```
 
-Then `sudo udevadm control --reload` and replug. The rule must sort before
-`73-seat-late.rules`, which is what applies `uaccess`. Recent versions of
-[qmk_udev](https://github.com/qmk/qmk_udev) tag raw HID for all QMK boards,
-but some distro packages ship an older helper that only tags the console
-interface, so check with `qmk-autolayer list`:
+`sudo udevadm control --reload`, replug, then confirm:
 
 ```
 $ qmk-autolayer list
 /dev/hidraw1 7179:8475 gok TypeK-S Rev. Zeta-RC2
 ```
 
+The rule file must sort before `73-seat-late.rules`. Current
+[qmk_udev](https://github.com/qmk/qmk_udev) rules cover raw HID; older
+distro-packaged versions cover only the console interface.
+
 ## Firmware
 
-QMK has no built-in "set layer from host" command, so the keyboard needs a
-few lines. Pick the one that matches your board.
+The daemon sends a 32-byte report `[0x42, layer, state]` with `state` 1 for
+on, 0 for off. QMK has no built-in handler for this, so add one.
 
-**VIA boards** (`VIA_ENABLE = yes`): VIA owns `raw_hid_receive`, but hands
-unknown command ids to `via_command_kb`. The command id `0x42` is outside
-VIA's range, and the VIA app never sends it, so both coexist.
+VIA boards (`VIA_ENABLE = yes`). VIA owns `raw_hid_receive` and forwards
+command ids it does not recognise to `via_command_kb`:
 
 ```c
-// keyboard.c or keymap.c
 #include "via.h"
 
 bool via_command_kb(uint8_t *data, uint8_t length) {
     if (length < 3 || data[0] != 0x42) {
-        return false;                       // not ours, let VIA handle it
+        return false;
     }
-    uint8_t layer = data[1];
-    if (layer < DYNAMIC_KEYMAP_LAYER_COUNT) {
-        data[2] ? layer_on(layer) : layer_off(layer);
+    if (data[1] < DYNAMIC_KEYMAP_LAYER_COUNT) {
+        data[2] ? layer_on(data[1]) : layer_off(data[1]);
     }
-    return true;                            // handled, no reply
+    return true;
 }
 ```
 
-**Plain raw HID boards** (`RAW_ENABLE = yes` in `rules.mk`, no VIA):
+Non-VIA boards (`RAW_ENABLE = yes`):
 
 ```c
-// keymap.c
 #include "raw_hid.h"
 
 void raw_hid_receive(uint8_t *data, uint8_t length) {
     if (length < 3 || data[0] != 0x42) {
         return;
     }
-    uint8_t layer = data[1];
-    if (layer < 32) {
-        data[2] ? layer_on(layer) : layer_off(layer);
+    if (data[1] < 32) {
+        data[2] ? layer_on(data[1]) : layer_off(data[1]);
     }
 }
 ```
 
-If `0x42` collides with something your firmware already uses, pick another
-id and set `command = 0x..` on the keyboard in the config.
+Command id `0x42` is outside the range VIA uses (`0x01`–`0x0F`), so the VIA
+app and this daemon share the interface without conflict. The id can only
+collide with code you added yourself: if your keyboard or keymap already
+defines `raw_hid_receive` or `via_command_kb` and handles `0x42` there,
+choose another id in both the firmware and the config (`command` under
+`[[keyboard]]`).
 
-## Config
+## Configuration
 
-`$XDG_CONFIG_HOME/qmk-autolayer/config.toml`, which is
-`~/.config/qmk-autolayer/config.toml` unless you've set `XDG_CONFIG_HOME`.
-Override with `--config PATH`. Edits are picked up on the next focus change;
-no restart needed (except for changes to the keyboard list). A broken edit is
-reported once and the last good config stays in effect.
+`$XDG_CONFIG_HOME/qmk-autolayer/config.toml`, defaulting to
+`~/.config/qmk-autolayer/config.toml`. `--config PATH` overrides. The file is
+re-read when its mtime changes; a file that fails to parse is reported once
+and the previous configuration stays in effect. Changes to `[[keyboard]]`
+require a restart.
 
 ```toml
-# Layer used by rules that don't name one.
+# Layer for rules that do not set one.
 default_layer = 1
 
-# Keyboards to drive. Omit this section entirely to use the first QMK
-# raw-HID device found. Ids as hex integers or strings; `lsusb` shows them.
+# Omit to use the first QMK raw-HID device found.
 [[keyboard]]
 name = "typek"
 vid = 0x7179
 pid = 0x8475
-# command = 0x42            # raw-HID command id, if you changed it in firmware
+# command = 0x42   # only if changed in firmware
 
-# Rules, first match wins. `match` patterns are compared against the focused
-# window's class, initial class, and executable name; `*` is a wildcard.
+# First matching rule wins. Patterns are compared against the window's
+# class, initial class, and executable name. `*` matches any characters.
 [[rule]]
-match = ["steam_app_*"]     # every Proton game
+match = ["steam_app_*"]                      # Proton games
+
 [[rule]]
-match = ["valheim.x86_64", "Terraria", "tModLoader"]   # native games, by exe / class
+match = ["valheim.x86_64", "Terraria"]       # native games
+
 [[rule]]
 match = ["firefox"]
 layer = 2
-# keyboard = "typek"        # restrict a rule to one keyboard
+# keyboard = "typek"                         # limit to one keyboard
 ```
 
-Finding the right name for a window: run the daemon in the foreground with
-`-v` and focus the app, or `hyprctl activewindow`.
+To find a window's class or executable name, run `qmk-autolayer -v` and
+focus it, or use `hyprctl activewindow`.
+
+## Usage
 
 ```
-$ qmk-autolayer -v
-qmk-autolayer: 3 rule(s), 1 keyboard(s), config /home/you/.config/qmk-autolayer/config.toml
-typek: /dev/hidraw1 7179:8475 gok TypeK-S Rev. Zeta-RC2
-focus: class=valheim.x86_64 initial=valheim.x86_64 exe=valheim.x86_64 -> typek layer 1
-typek: layer 1 on
-focus: class=com.mitchellh.ghostty initial=com.mitchellh.ghostty exe=ghostty -> typek none
-typek: layer off
+qmk-autolayer [-v] [--config PATH]                   run the daemon
+qmk-autolayer list                                   list QMK raw-HID devices
+qmk-autolayer set <layer> on|off [--keyboard NAME]   send one report
 ```
 
-## Commands
+Logs: `journalctl --user -u qmk-autolayer -f`.
 
-```
-qmk-autolayer [-v] [--config PATH]                       run (this is what the unit does)
-qmk-autolayer list                                       show QMK raw-HID devices
-qmk-autolayer set <layer> on|off [--keyboard NAME]       one-shot, for checking the wiring
-```
+## Behaviour
 
-Logs: `journalctl --user -u qmk-autolayer -f` (or `just tail`).
-
-## Behaviour notes
-
-- Keyboard unplugged or in DFU: detected immediately, the node is re-found
-  when it returns, layers are cleared and the current focus re-applied.
-- Hyprland restarted: the daemon reconnects and rediscovers the new
-  instance socket.
-- Daemon stopped while a layer is on: the layer stays on until the next
-  run clears it, or you toggle it yourself.
-- Several keyboards: list each under `[[keyboard]]`; rules apply to all of
-  them unless they name one.
+- Reports are sent only when the wanted layer changes. A layer toggled by
+  hand while no rule matches is left alone.
+- On startup and whenever a keyboard is (re)attached, every layer the rules
+  reference is turned off, then the current focus is applied.
+- Keyboard unplug is detected immediately; the node is re-found when the
+  device returns.
+- A Hyprland restart is handled by reconnecting to the new instance socket.
+- Stopping the daemon does not turn layers off.
 
 ## Other compositors
 
-Only Hyprland today. A backend is two functions in one module
-(`src/hypr.rs`): stream focus-change events, and return the focused window's
-class / initial class / pid. niri (`niri msg --json event-stream`), Sway and
-i3 (`subscribe window` on the IPC socket), and X11 (`_NET_ACTIVE_WINDOW`)
-would all fit. Pull requests welcome.
+A backend is one module providing two functions: emit an event on focus
+change, and return the focused window's class, initial class, and pid. See
+`src/hypr.rs`. niri, Sway/i3, and X11 are all feasible.
 
-## Prior art
+## Related projects
 
-Other host-side layer switchers exist. They differ in platform and weight:
 [active-app-qmk-layer-updater](https://github.com/zigotica/active-app-qmk-layer-updater)
-(Node.js, macOS-first), [auto_layers](https://github.com/itsvar8/auto_layers)
-(Python + Qt, Windows), and [qmk-hid-host](https://github.com/zzeneg/qmk-hid-host)
-(Rust; pushes time, volume and media info to the keyboard rather than
-switching layers). None is Wayland-native or dependency-free, and none is
-designed to sit beside VIA on the same interface.
+(Node.js, macOS), [auto_layers](https://github.com/itsvar8/auto_layers)
+(Python, Windows), [qmk-hid-host](https://github.com/zzeneg/qmk-hid-host)
+(Rust; sends host data to the keyboard, no layer switching).
 
 ## License
 
