@@ -24,11 +24,18 @@ cd qmk-autolayer
 make install
 ```
 
-`make install` builds and installs the binary to `~/.cargo/bin`, installs
-`qmk-autolayer.service` as a systemd user unit, and enables it. The unit is
-bound to `graphical-session.target`. `make uninstall` removes both.
-`make start`, `make stop`, `make restart`, `make status`, `make logs` wrap
-`systemctl --user`.
+| Target | Effect |
+|---|---|
+| `make install` | Build, install the binary to `~/.cargo/bin`, install and enable `qmk-autolayer.service` as a systemd user unit |
+| `make uninstall` | Stop and remove the service and the binary |
+| `make start` / `stop` / `restart` | Control the service |
+| `make status` | `systemctl --user status` |
+| `make logs` | Follow the journal |
+| `make test` / `make lint` | Tests; `fmt --check` and `clippy -D warnings` |
+
+The service is bound to `graphical-session.target`, so it starts with the
+Wayland session and stops with it. `PREFIX=/some/dir make install` puts the
+binary under `$PREFIX/bin` instead.
 
 ### hidraw access
 
