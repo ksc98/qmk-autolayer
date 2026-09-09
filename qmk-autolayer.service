@@ -1,0 +1,13 @@
+[Unit]
+Description=qmk-autolayer: switch QMK keyboard layers from the focused window
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/qmk-autolayer
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical-session.target

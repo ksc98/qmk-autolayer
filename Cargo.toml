@@ -1,0 +1,22 @@
+[package]
+name = "qmk-autolayer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Switch QMK keyboard layers automatically from the focused window on Linux (Hyprland), over raw HID"
+license = "MIT"
+repository = "https://github.com/ksc98/qmk-autolayer"
+keywords = ["qmk", "keyboard", "hyprland", "wayland", "hid"]
+categories = ["command-line-utilities", "hardware-support"]
+
+# Only the config parser is a dependency. Compositor IPC is a line protocol
+# over unix sockets and the keyboard is a hidraw file write; both are std-only.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+opt-level = "s"
