@@ -6,11 +6,8 @@ writes a raw-HID report to the keyboard, which calls `layer_on` or
 `layer_off`. Layer logic, indicators, and per-layer lighting stay in
 firmware.
 
-Rust, two dependencies (`serde`, `toml`). Event-driven, no polling: three
-threads, all blocked while idle. Measured on a running instance: 600 KB
-binary, under 3 MB resident, about 5 ms of CPU time per hour of desktop
-use. Each focus change costs one unix-socket round trip and a few small file
-reads.
+Rust, two dependencies (`serde`, `toml`), no polling. Typically 3 MB resident
+and idle at 0% CPU; each window change costs under 0.1 ms.
 
 ## Requirements
 
