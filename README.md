@@ -21,12 +21,14 @@ and idle at 0% CPU; each window change costs under 0.1 ms.
 ```sh
 git clone https://github.com/ksc98/qmk-autolayer
 cd qmk-autolayer
-just install
+make install
 ```
 
-`just install` runs `cargo install --path . --locked`, installs
+`make install` builds and installs the binary to `~/.cargo/bin`, installs
 `qmk-autolayer.service` as a systemd user unit, and enables it. The unit is
-bound to `graphical-session.target`.
+bound to `graphical-session.target`. `make uninstall` removes both.
+`make start`, `make stop`, `make restart`, `make status`, `make logs` wrap
+`systemctl --user`.
 
 ### hidraw access
 
@@ -138,7 +140,7 @@ qmk-autolayer list                                   list QMK raw-HID devices
 qmk-autolayer set <layer> on|off [--keyboard NAME]   send one report
 ```
 
-Logs: `journalctl --user -u qmk-autolayer -f`.
+Logs: `make logs` or `journalctl --user -u qmk-autolayer -f`.
 
 ## Behaviour
 
