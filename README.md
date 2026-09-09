@@ -113,11 +113,12 @@ pid = 0x8475
 
 # First matching rule wins. Patterns are compared against the window's
 # class, initial class, and executable name. `*` matches any characters.
+# A rule without `layer` uses `default_layer`.
 [[rule]]
-match = ["steam_app_*"]                      # Proton games
+match = ["steam_app_*"]                      # Proton games, layer 1
 
 [[rule]]
-match = ["valheim.x86_64", "Terraria"]       # native games
+match = ["valheim.x86_64", "Terraria"]       # native games, layer 1
 
 [[rule]]
 match = ["firefox"]
